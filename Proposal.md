@@ -19,7 +19,6 @@ Beyond environmental urgency, this topic is accessible and visually compelling: 
 | [Our World in Data — Plastic Pollution](https://ourworldindata.org/plastic-pollution) | Per-capita waste, mismanagement rates, ocean inputs by country/year | Free CSV download |
 | [Ocean Health Index](https://oceanhealthindex.org/global-scores/) | Annual ocean health scores across 10 sub-goals by country | Free CSV download |
 | [The Ocean Cleanup — River Sources](https://theoceancleanup.com/sources/) | Top 1,000 plastic-emitting rivers with estimated annual input | Published research data |
-| [Kaggle — Plastic Pollution](https://www.kaggle.com/datasets/souvikgiri/plastic-pollution) | Country-level waste generation and recycling rates | Free CSV |
 
 All datasets are publicly available and free. Data spans 2000–2023, is country-level or river-level, and includes numeric, geographic, and temporal dimensions. Known limitations include sparse data for low-income nations and estimation uncertainty in river plastic flow models.
 

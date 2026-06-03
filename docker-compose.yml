@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./src/backend
+    volumes:
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    environment:
+      - DATA_DIR=/app/data
+
+  frontend:
+    build: ./src/frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
