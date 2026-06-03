@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import plastic, rivers, ocean_health
+from routers import plastic, rivers, ocean_health, forecast
 
 app = FastAPI(title="Plastic Pollution Dashboard API")
 
@@ -27,3 +27,4 @@ def health():
 app.include_router(plastic.router)
 app.include_router(rivers.router)
 app.include_router(ocean_health.router)
+app.include_router(forecast.router)

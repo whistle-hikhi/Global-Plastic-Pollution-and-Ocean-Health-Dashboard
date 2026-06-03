@@ -6,7 +6,7 @@ import LineChart from './LineChart.jsx'
 import RangeSlider from './RangeSlider.jsx'
 import SearchBox from './SearchBox.jsx'
 import Spinner from './Spinner.jsx'
-import { fetchOHI, fetchOHITrend, fetchOHIRadar } from '../api.js'
+import { fetchOHI, fetchOHITrend, fetchOHIRadar, fetchForecast } from '../api.js'
 import { useTheme } from '../ThemeContext.jsx'
 
 const colorScale = d3.scaleSequential(d3.interpolateGnBu).domain([100, 30])
@@ -49,6 +49,17 @@ export default function Act3_OceanHealth() {
   const [suggestions, setSuggestions] = useState([])
   const [showBottom, setShowBottom] = useState(false)
   const [scoreRange, setScoreRange] = useState([0, 100])
+  const [forecastModel, setForecastModel] = useState(null)   // null = hidden
+  const [forecastData, setForecastData] = useState(null)
+  const [forecastLoading, setForecastLoading] = useState(false)
+  const [forecastMeta, setForecastMeta] = useState(null)
+
+  const FORECAST_MODELS = [
+    { id: 'linear',       label: 'Linear',      short: 'Linear Regression' },
+    { id: 'polynomial',   label: 'Poly(2)',      short: 'Polynomial deg-2'  },
+    { id: 'holt_winters', label: 'Holt-Winters', short: 'Holt-Winters ES'  },
+    { id: 'arima',        label: 'ARIMA',        short: 'ARIMA(1,1,1)'     },
+  ]
 
   const listRef = useRef()
   const rowRefs = useRef({})
@@ -83,6 +94,7 @@ export default function Act3_OceanHealth() {
     setSelected(ohiRow)
     setQuery(ohiRow.entity)
     setSuggestions([])
+    setForecastModel(null); setForecastData(null); setForecastMeta(null)
     Promise.all([
       fetchOHITrend(ohiRow.region_id, 'Index', 'score'),
       fetchOHIRadar(ohiRow.region_id, endYear),
@@ -107,6 +119,19 @@ export default function Act3_OceanHealth() {
     const lower = q.toLowerCase()
     setSuggestions(scores.filter((s) => s.entity.toLowerCase().includes(lower)).slice(0, 8))
   }
+
+  const runForecast = useCallback((modelId) => {
+    if (!selected) return
+    if (forecastModel === modelId) { setForecastModel(null); setForecastData(null); setForecastMeta(null); return }
+    setForecastModel(modelId)
+    setForecastLoading(true)
+    fetchForecast(selected.region_id, modelId, 5).then((res) => {
+      setForecastLoading(false)
+      if (res.error) { setForecastData(null); setForecastMeta({ error: res.error }); return }
+      setForecastData(res.forecast)
+      setForecastMeta({ label: res.model_label, ...res.metrics })
+    })
+  }, [selected, forecastModel])
 
   const clearSearch = () => {
     setQuery('')
@@ -166,6 +191,8 @@ export default function Act3_OceanHealth() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '2rem', alignItems: 'start' }}>
+
+        {/* ── LEFT: map + trend chart ── */}
         <div>
           {!scores ? <Spinner /> : (
             <WorldChoropleth
@@ -175,8 +202,61 @@ export default function Act3_OceanHealth() {
               width={760} height={400}
             />
           )}
+
+          {/* Trend + forecast fills the empty left space */}
+          {selected && trend && (
+            <div style={{ marginTop: '1.25rem', padding: '1rem', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '10px' }}>
+              {/* Forecast model selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                <p style={{ color: C.textMuted, fontSize: '0.75rem', margin: 0 }}>
+                  OHI trend &amp; forecast · {selected.entity}
+                  <span style={{ color: C.textDim }}> · click a model for 5-year horizon</span>
+                </p>
+                <div style={{ display: 'flex', gap: '0.3rem', marginLeft: 'auto' }}>
+                  {FORECAST_MODELS.map((fm) => {
+                    const active = forecastModel === fm.id
+                    return (
+                      <button key={fm.id} onClick={() => runForecast(fm.id)} title={fm.short}
+                        style={{
+                          padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem',
+                          cursor: 'pointer', transition: 'all 0.15s',
+                          background: active ? C.accentSoft : C.surface,
+                          border: `1px solid ${active ? C.accent : C.border}`,
+                          color: active ? C.accent : C.textSecondary,
+                          fontWeight: active ? 700 : 400,
+                        }}>
+                        {fm.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Metrics */}
+              {forecastModel && (forecastLoading
+                ? <p style={{ color: C.textDim, fontSize: '0.72rem', marginBottom: '0.4rem' }}>Running {forecastModel}…</p>
+                : forecastMeta?.error
+                  ? <p style={{ color: '#ff6400', fontSize: '0.72rem', marginBottom: '0.4rem' }}>{forecastMeta.error}</p>
+                  : forecastMeta && (
+                    <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.4rem', fontSize: '0.72rem', color: C.textDim }}>
+                      <span>Model: <strong style={{ color: C.textSecondary }}>{forecastMeta.label}</strong></span>
+                      <span>R² <strong style={{ color: C.accent }}>{forecastMeta.r2}</strong></span>
+                      <span>MAE <strong style={{ color: C.accent }}>{forecastMeta.mae}</strong></span>
+                    </div>
+                  )
+              )}
+
+              <LineChart
+                data={trend.filter((d) => d.year >= yearRange[0] && d.year <= yearRange[1])}
+                forecast={forecastModel && !forecastLoading ? forecastData : null}
+                title=""
+                width={720} height={200}
+              />
+            </div>
+          )}
         </div>
 
+        {/* ── RIGHT: filters + ranking + radar ── */}
         <div>
           <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '8px' }}>
             <p style={{ color: C.textMuted, fontSize: '0.72rem', marginBottom: '0.25rem' }}>
@@ -198,21 +278,20 @@ export default function Act3_OceanHealth() {
             </button>
           </div>
 
-          <div ref={listRef} style={{ maxHeight: 260, overflowY: 'auto', marginBottom: '1rem' }}>
+          <div ref={listRef} style={{ maxHeight: 300, overflowY: 'auto', marginBottom: '1rem' }}>
             {!scores ? <Spinner /> : displayList.map((c, i) => {
               const rank = showBottom ? sortedScores.length - i : i + 1
               const isSelected = selected?.code === c.code
               const barColor = colorScale(c.value)
               return (
-                <div
-                  key={c.code}
+                <div key={c.code}
                   ref={(el) => { rowRefs.current[c.code] = el }}
                   onClick={() => selectCountry(c)}
                   style={{
                     padding: '0.3rem 0.5rem', borderRadius: 6, marginBottom: 2,
                     cursor: 'pointer', transition: 'all 0.12s',
                     background: isSelected ? C.accentSoft : 'transparent',
-                    border: isSelected ? `1px solid ${C.accentBorder}` : `1px solid transparent`,
+                    border: isSelected ? `1px solid ${C.accentBorder}` : '1px solid transparent',
                     boxShadow: isSelected ? `inset 3px 0 0 ${C.accent}` : 'none',
                   }}
                   onMouseEnter={(e) => {
@@ -245,21 +324,13 @@ export default function Act3_OceanHealth() {
             })}
           </div>
 
+          {/* Radar in right panel */}
           {selected ? (
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: '1rem' }}>
               <p style={{ color: C.textMuted, fontSize: '0.75rem', marginBottom: '0.5rem' }}>
                 Sub-goal breakdown · {selected.entity}
               </p>
-              {radar && <RadarChart data={radar} width={300} height={260} />}
-              {trend && (
-                <div style={{ marginTop: '0.75rem' }}>
-                  <LineChart
-                    data={trend.filter((d) => d.year >= yearRange[0] && d.year <= yearRange[1])}
-                    title={`OHI ${yearRange[0]}–${yearRange[1]} — ${selected.entity}`}
-                    width={320} height={160}
-                  />
-                </div>
-              )}
+              {radar && <RadarChart data={radar} width={300} height={280} />}
             </div>
           ) : (
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: '1rem', color: C.textDim, fontSize: '0.82rem' }}>

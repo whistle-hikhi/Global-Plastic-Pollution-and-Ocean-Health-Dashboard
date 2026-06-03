@@ -44,3 +44,8 @@ export async function fetchOHIRadar(regionId = 0, year = 2023) {
   const res = await fetch(`${BASE}/ohi/radar?region_id=${regionId}&year=${year}`)
   return res.json()
 }
+
+export async function fetchForecast(regionId = 0, model = 'linear', horizon = 5) {
+  const res = await fetch(`${BASE}/ohi/forecast?region_id=${regionId}&model=${model}&horizon=${horizon}`)
+  return res.json()
+}
