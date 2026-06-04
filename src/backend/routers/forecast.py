@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Query
 import numpy as np
 import warnings
+import logging
+
+logging.getLogger("prophet").setLevel(logging.WARNING)
+logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
 router = APIRouter(prefix="/api/ohi/forecast", tags=["forecast"])
 
@@ -89,11 +93,48 @@ def _arima(years, values, horizon):
     return rows, met
 
 
+def _prophet(years, values, horizon):
+    import pandas as pd
+    from prophet import Prophet
+
+    df = pd.DataFrame({
+        "ds": pd.to_datetime([str(y) for y in years]),
+        "y": [float(v) for v in values],
+    })
+    m = Prophet(
+        yearly_seasonality=False,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.3,
+        interval_width=0.80,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        m.fit(df)
+
+    future = m.make_future_dataframe(periods=horizon, freq="YE")
+    fc = m.predict(future)
+
+    fitted = fc["yhat"].values[: len(years)]
+    future_rows = fc.tail(horizon)
+    result = [
+        {
+            "year": int(row["ds"].year),
+            "value": round(float(np.clip(row["yhat"], 0, 100)), 2),
+            "lower": round(float(max(0.0, row["yhat_lower"])), 2),
+            "upper": round(float(min(100.0, row["yhat_upper"])), 2),
+        }
+        for _, row in future_rows.iterrows()
+    ]
+    return result, _metrics(np.array(values), fitted)
+
+
 _DISPATCH = {
     "linear": _linear,
     "polynomial": _polynomial,
     "holt_winters": _holt_winters,
     "arima": _arima,
+    "prophet": _prophet,
 }
 
 _MODEL_LABELS = {
@@ -101,6 +142,7 @@ _MODEL_LABELS = {
     "polynomial": "Polynomial (degree 2)",
     "holt_winters": "Holt-Winters",
     "arima": "ARIMA(1,1,1)",
+    "prophet": "Prophet",
 }
 
 

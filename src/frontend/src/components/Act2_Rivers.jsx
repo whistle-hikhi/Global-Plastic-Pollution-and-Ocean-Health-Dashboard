@@ -4,7 +4,7 @@ import * as topojson from 'topojson-client'
 import RangeSlider from './RangeSlider.jsx'
 import SearchBox from './SearchBox.jsx'
 import Spinner from './Spinner.jsx'
-import { fetchRivers, fetchRiversByCountry, fetchRiversByContinent } from '../api.js'
+import { fetchRivers, fetchRiversByCountry, fetchRiversByContinent, fetchRiversClusters } from '../api.js'
 import { useTheme } from '../ThemeContext.jsx'
 
 const TOPO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json'
@@ -23,6 +23,16 @@ const CONTINENT_COLORS = {
   'Oceania': '#00838f',
 }
 
+// 10 categorical colors for clusters, ordered so rank-0 (highest emitter) is most prominent
+const CLUSTER_PALETTE = [
+  '#e63946', '#f4a261', '#e9c46a', '#2a9d8f', '#264653',
+  '#6a994e', '#4cc9f0', '#9b5de5', '#f72585', '#48cae4',
+]
+
+function clusterColor(rank) {
+  return CLUSTER_PALETTE[rank % CLUSTER_PALETTE.length]
+}
+
 const W = 860, H = 430
 
 function fmtEmission(v) {
@@ -37,6 +47,7 @@ export default function Act2_Rivers() {
   const zoomRef = useRef()
   const gRef = useRef()
   const pathRef = useRef()
+  const projectionRef = useRef()
   const iso3MapRef = useRef({})
   const featuresRef = useRef([])
 
@@ -44,6 +55,10 @@ export default function Act2_Rivers() {
   const [byCountry, setByCountry] = useState(null)
   const [allCountries, setAllCountries] = useState(null)
   const [byContinent, setByContinent] = useState(null)
+  const [clusters, setClusters] = useState(null)
+  const [selectedCluster, setSelectedCluster] = useState(null)
+  const [sidebarMode, setSidebarMode] = useState('clusters')
+
   const [highlighted, setHighlighted] = useState(null)
   const [selectedContinent, setSelectedContinent] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -60,11 +75,13 @@ export default function Act2_Rivers() {
       fetchRiversByCountry(20),
       fetchRiversByCountry(200),
       fetchRiversByContinent(),
-    ]).then(([r, top20, all, cont]) => {
+      fetchRiversClusters(),
+    ]).then(([r, top20, all, cont, clust]) => {
       setRivers(r)
       setByCountry(top20)
       setAllCountries(all)
       setByContinent(cont)
+      setClusters(clust)
       setEmRange([0, 300000])
     })
   }, [])
@@ -79,6 +96,7 @@ export default function Act2_Rivers() {
     const projection = d3.geoNaturalEarth1().fitSize([W, H], { type: 'Sphere' })
     const path = d3.geoPath(projection)
     pathRef.current = path
+    projectionRef.current = projection
 
     const emissionByIso3 = {}
     byCountry.forEach((d) => { if (d.iso3) emissionByIso3[d.iso3] = d.total_emissions })
@@ -123,7 +141,7 @@ export default function Act2_Rivers() {
         .attr('stroke', C.mapBorder)
         .attr('stroke-width', 0.4)
 
-      // Invisible selection overlay (drawn on top, updated by selectedCode effect)
+      // Invisible selection overlay
       g.append('path').attr('class', 'country-sel')
         .attr('fill', 'none')
         .attr('stroke', '#00b4d8')
@@ -137,14 +155,25 @@ export default function Act2_Rivers() {
         .attr('cx', (d) => { const p = projection([d.lon, d.lat]); return p ? p[0] : -9999 })
         .attr('cy', (d) => { const p = projection([d.lon, d.lat]); return p ? p[1] : -9999 })
         .attr('r', (d) => rScale(d.emissions))
-        .attr('fill', 'rgba(0,180,216,0.5)')
-        .attr('stroke', 'rgba(0,180,216,0.85)')
+        .attr('fill', (d) => clusterColor(d.cluster_rank) + 'cc')
+        .attr('stroke', (d) => clusterColor(d.cluster_rank))
         .attr('stroke-width', 0.4)
         .style('pointer-events', 'none')
     })
   }, [rivers, byCountry, C])
 
-  // Highlight + zoom when selected changes
+  // Highlight dots when a cluster is selected
+  useEffect(() => {
+    if (!gRef.current) return
+    gRef.current.selectAll('.river-dot')
+      .transition().duration(200)
+      .attr('opacity', (d) => {
+        if (!selectedCluster) return 1
+        return d.cluster_id === selectedCluster.id ? 1 : 0.08
+      })
+  }, [selectedCluster])
+
+  // Highlight + zoom when selected country changes
   useEffect(() => {
     if (!gRef.current || !pathRef.current) return
     const iso3 = selected?.iso3
@@ -152,13 +181,11 @@ export default function Act2_Rivers() {
       ? featuresRef.current.find((f) => iso3MapRef.current[f.id] === iso3)
       : null
 
-    // Update selection outline
     gRef.current.select('.country-sel')
       .attr('d', feature ? pathRef.current(feature) : null)
 
     if (!feature || !zoomRef.current || !svgRef.current) return
 
-    // Auto-zoom to country
     const [[x0, y0], [x1, y1]] = pathRef.current.bounds(feature)
     const bw = x1 - x0, bh = y1 - y0
     if (bw === 0 || bh === 0) return
@@ -171,7 +198,7 @@ export default function Act2_Rivers() {
       .call(zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
   }, [selected])
 
-  // Scroll selected country into view in the ranking list
+  // Scroll selected country into view
   useEffect(() => {
     if (!selected) return
     const el = rowRefs.current[selected.country]
@@ -179,6 +206,31 @@ export default function Act2_Rivers() {
       el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     }
   }, [selected])
+
+  const selectCluster = useCallback((cluster) => {
+    setSelectedCluster((prev) => {
+      if (prev?.id === cluster.id) return null
+      return cluster
+    })
+
+    if (!projectionRef.current || !zoomRef.current || !svgRef.current) return
+    const proj = projectionRef.current
+    const { lat_min, lat_max, lon_min, lon_max } = cluster.bbox
+    const p0 = proj([lon_min, lat_max])
+    const p1 = proj([lon_max, lat_min])
+    if (!p0 || !p1) return
+    const [x0, y0] = p0
+    const [x1, y1] = p1
+    const bw = x1 - x0, bh = y1 - y0
+    if (bw <= 0 || bh <= 0) return
+    const padding = 30
+    const scale = Math.min(8, 0.85 / Math.max(bw / (W - padding * 2), bh / (H - padding * 2)))
+    const tx = W / 2 - scale * (x0 + bw / 2)
+    const ty = H / 2 - scale * (y0 + bh / 2)
+    d3.select(svgRef.current)
+      .transition().duration(700)
+      .call(zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
+  }, [])
 
   const selectCountry = useCallback((row) => {
     setSelected(row)
@@ -200,6 +252,7 @@ export default function Act2_Rivers() {
     setSelected(null)
     setHighlighted(null)
     setSelectedContinent(null)
+    setSelectedCluster(null)
     if (zoomRef.current && svgRef.current) {
       d3.select(svgRef.current).transition().duration(500)
         .call(zoomRef.current.transform, d3.zoomIdentity)
@@ -208,7 +261,6 @@ export default function Act2_Rivers() {
 
   const [showBottom, setShowBottom] = useState(false)
 
-  // When a continent is active, draw from allCountries so we get full coverage (not just global top-20)
   const filteredByRange = useMemo(() => {
     if (!byCountry || !allCountries) return []
     const source = selectedContinent
@@ -219,7 +271,7 @@ export default function Act2_Rivers() {
     return showBottom ? sorted.slice(-20).reverse() : sorted.slice(0, 20)
   }, [byCountry, allCountries, emRange, showBottom, selectedContinent])
 
-  if (!rivers || !byCountry || !byContinent) return <Spinner />
+  if (!rivers || !byCountry || !byContinent || !clusters) return <Spinner />
 
   const totalAll = byContinent.reduce((s, d) => s + d.total_emissions, 0)
   const topContinent = byContinent[0]
@@ -227,9 +279,12 @@ export default function Act2_Rivers() {
     ? allCountries?.findIndex((c) => c.country === selected.country) + 1
     : null
   const maxEm = 300000
-  const selectedInRange = selected
-    ? (selected.total_emissions >= emRange[0] && selected.total_emissions <= emRange[1])
-    : true
+  const tabStyle = (active) => ({
+    flex: 1, padding: '0.3rem 0', fontSize: '0.78rem', fontWeight: active ? 700 : 400,
+    background: active ? C.accent + '22' : 'transparent',
+    border: 'none', borderBottom: `2px solid ${active ? C.accent : C.border}`,
+    color: active ? C.accent : C.textMuted, cursor: 'pointer', transition: 'all 0.15s',
+  })
 
   return (
     <div>
@@ -241,6 +296,11 @@ export default function Act2_Rivers() {
             <span style={{ color: '#ef6c00', fontWeight: 700 }}>
               {((topContinent?.total_emissions / totalAll) * 100).toFixed(0)}%
             </span> of all emission points.
+            {selectedCluster && (
+              <span style={{ color: clusterColor(clusters.indexOf(selectedCluster)), fontWeight: 600, marginLeft: '0.5rem' }}>
+                · Viewing: {selectedCluster.label} cluster
+              </span>
+            )}
           </p>
           <div style={{ marginLeft: 'auto' }}>
             <SearchBox
@@ -311,7 +371,7 @@ export default function Act2_Rivers() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: '2rem', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '2rem', alignItems: 'start' }}>
         <div style={{ position: 'relative' }}>
           <svg ref={svgRef} width={W} height={H} style={{ display: 'block', borderRadius: 8, cursor: 'grab' }} />
           <div style={{ position: 'absolute', bottom: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -328,73 +388,166 @@ export default function Act2_Rivers() {
               }}>{l}</button>
             ))}
           </div>
-          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <svg width={140} height={10}>
-              {Array.from({ length: 10 }, (_, i) => (
-                <rect key={i} x={i * 14} y={0} width={14} height={10} fill={d3.scaleSequential(d3.interpolateOranges).domain([0, 1])(i / 9)} />
+
+          {/* Legend row */}
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <svg width={140} height={10}>
+                {Array.from({ length: 10 }, (_, i) => (
+                  <rect key={i} x={i * 14} y={0} width={14} height={10} fill={d3.scaleSequential(d3.interpolateOranges).domain([0, 1])(i / 9)} />
+                ))}
+              </svg>
+              <span style={{ color: C.textMuted, fontSize: '0.72rem' }}>country emission intensity</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              {CLUSTER_PALETTE.slice(0, clusters.length).map((col, i) => (
+                <div key={i} title={`Cluster #${i + 1}: ${clusters[i]?.label}`} style={{
+                  width: 10, height: 10, borderRadius: '50%', background: col,
+                  opacity: selectedCluster && clusters[i]?.id !== selectedCluster.id ? 0.3 : 1,
+                  cursor: 'pointer', transition: 'opacity 0.15s',
+                }} onClick={() => selectCluster(clusters[i])} />
               ))}
-            </svg>
-            <span style={{ color: C.textMuted, fontSize: '0.72rem' }}>emission intensity (t/yr, √-scaled) · dots = outlet points</span>
+              <span style={{ color: C.textMuted, fontSize: '0.72rem', marginLeft: 2 }}>clusters</span>
+            </div>
           </div>
         </div>
 
+        {/* Right sidebar */}
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <p style={{ color: C.textMuted, fontSize: '0.82rem', margin: 0 }}>
-              {showBottom ? 'Bottom 20' : 'Top 20'}
-              {selectedContinent
-                ? <> in <span style={{ color: CONTINENT_COLORS[selectedContinent] || C.accent, fontWeight: 700 }}>{selectedContinent}</span></>
-                : ' in range'}
-              {' '}({filteredByRange.length})
-            </p>
-            <button onClick={() => setShowBottom((v) => !v)} style={{
-              background: C.surface, border: `1px solid ${C.border}`,
-              borderRadius: '6px', padding: '0.2rem 0.6rem',
-              color: C.textMuted, fontSize: '0.75rem', cursor: 'pointer',
-            }}>
-              Show {showBottom ? 'top' : 'bottom'}
+          {/* Tab toggle */}
+          <div style={{ display: 'flex', marginBottom: '0.75rem', borderBottom: `1px solid ${C.border}` }}>
+            <button style={tabStyle(sidebarMode === 'clusters')} onClick={() => setSidebarMode('clusters')}>
+              Hotspot Clusters
+            </button>
+            <button style={tabStyle(sidebarMode === 'countries')} onClick={() => setSidebarMode('countries')}>
+              Countries
             </button>
           </div>
-          <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '8px' }}>
-            <p style={{ color: C.textMuted, fontSize: '0.72rem', marginBottom: '0.25rem' }}>Filter by emission</p>
-            <RangeSlider min={0} max={maxEm} step={1000} value={emRange} onChange={setEmRange} formatLabel={fmtEmission} />
-          </div>
-          <div ref={listRef} style={{ maxHeight: 340, overflowY: 'auto' }}>
-            {filteredByRange.map((c, i) => {
-              const color = CONTINENT_COLORS[c.continent] || C.textDim
-              const pct = c.total_emissions / byCountry[0].total_emissions
-              const isSelected = selected?.country === c.country
-              const isHighlighted = !isSelected && (highlighted === c.continent || highlighted === c.country)
-              return (
-                <div key={c.country}
-                  ref={(el) => { rowRefs.current[c.country] = el }}
-                  onClick={() => selectCountry(c)}
-                  onMouseEnter={() => !selected && setHighlighted(c.continent)}
-                  onMouseLeave={() => !selected && setHighlighted(null)}
-                  style={{
-                    padding: '0.35rem 0.5rem', borderRadius: 6, marginBottom: '2px',
-                    cursor: 'pointer', transition: 'all 0.12s',
-                    background: isSelected ? `${color}35` : isHighlighted ? `${color}22` : 'transparent',
-                    border: isSelected ? `1px solid ${color}70` : isHighlighted ? `1px solid ${color}55` : '1px solid transparent',
-                    boxShadow: (isSelected || isHighlighted) ? `inset 3px 0 0 ${color}` : 'none',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '3px' }}>
-                    <span style={{ color: C.textDim, fontSize: '0.72rem', minWidth: 18, textAlign: 'right' }}>#{i + 1}</span>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                    <span style={{ color: C.textPrimary, fontSize: '0.82rem', flex: 1 }}>{c.country}</span>
-                    <span style={{ color: C.textMuted, fontSize: '0.72rem' }}>{fmtEmission(c.total_emissions)}</span>
-                  </div>
-                  <div style={{ marginLeft: 30 }}>
-                    <div style={{ height: 3, borderRadius: 2, width: `${pct * 100}%`, background: `linear-gradient(90deg, ${color}, ${color}88)` }} />
-                  </div>
-                </div>
-              )
-            })}
-            {filteredByRange.length === 0 && (
-              <p style={{ color: C.textDim, fontSize: '0.82rem', padding: '0.5rem' }}>No countries in this range.</p>
-            )}
-          </div>
+
+          {sidebarMode === 'clusters' ? (
+            <div>
+              <p style={{ color: C.textMuted, fontSize: '0.72rem', margin: '0 0 0.5rem' }}>
+                {clusters.length} geographic clusters · click to zoom
+                {selectedCluster && (
+                  <button onClick={() => setSelectedCluster(null)} style={{
+                    marginLeft: '0.5rem', background: 'none', border: 'none',
+                    color: C.accent, fontSize: '0.72rem', cursor: 'pointer', padding: 0,
+                  }}>clear</button>
+                )}
+              </p>
+              <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                {clusters.map((cl, rank) => {
+                  const col = clusterColor(rank)
+                  const isSelected = selectedCluster?.id === cl.id
+                  return (
+                    <div key={cl.id}
+                      onClick={() => selectCluster(cl)}
+                      style={{
+                        padding: '0.5rem 0.6rem', borderRadius: 7, marginBottom: 4,
+                        cursor: 'pointer', transition: 'all 0.12s',
+                        background: isSelected ? `${col}28` : 'transparent',
+                        border: isSelected ? `1px solid ${col}70` : `1px solid ${C.border}`,
+                        boxShadow: isSelected ? `inset 3px 0 0 ${col}` : 'none',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: 4 }}>
+                        <span style={{ color: C.textDim, fontSize: '0.72rem', minWidth: 16, textAlign: 'right' }}>#{rank + 1}</span>
+                        <span style={{
+                          width: 10, height: 10, borderRadius: '50%', background: col, flexShrink: 0,
+                          boxShadow: isSelected ? `0 0 6px ${col}` : 'none',
+                        }} />
+                        <span style={{ color: C.textPrimary, fontSize: '0.82rem', fontWeight: 600, flex: 1 }}>{cl.label}</span>
+                        <span style={{ color: col, fontWeight: 700, fontSize: '0.88rem' }}>{cl.emission_pct}%</span>
+                      </div>
+
+                      {/* Emission bar */}
+                      <div style={{ marginLeft: 26, marginBottom: 4 }}>
+                        <div style={{ height: 3, borderRadius: 2, background: C.border, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${cl.emission_pct}%`, background: `linear-gradient(90deg, ${col}, ${col}88)` }} />
+                        </div>
+                      </div>
+
+                      <div style={{ marginLeft: 26, display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span style={{ color: C.textDim, fontSize: '0.7rem' }}>{cl.continent}</span>
+                        <span style={{ color: C.textDim, fontSize: '0.7rem' }}>·</span>
+                        <span style={{ color: C.textDim, fontSize: '0.7rem' }}>{cl.point_count.toLocaleString()} pts</span>
+                      </div>
+
+                      {isSelected && cl.top_countries?.length > 0 && (
+                        <div style={{ marginLeft: 26, marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {cl.top_countries.map((tc) => (
+                            <span key={tc.country} style={{
+                              padding: '1px 6px', borderRadius: 10, fontSize: '0.68rem',
+                              background: `${col}22`, border: `1px solid ${col}55`, color: C.textSecondary,
+                            }}>{tc.country}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <p style={{ color: C.textMuted, fontSize: '0.82rem', margin: 0 }}>
+                  {showBottom ? 'Bottom 20' : 'Top 20'}
+                  {selectedContinent
+                    ? <> in <span style={{ color: CONTINENT_COLORS[selectedContinent] || C.accent, fontWeight: 700 }}>{selectedContinent}</span></>
+                    : ' in range'}
+                  {' '}({filteredByRange.length})
+                </p>
+                <button onClick={() => setShowBottom((v) => !v)} style={{
+                  background: C.surface, border: `1px solid ${C.border}`,
+                  borderRadius: '6px', padding: '0.2rem 0.6rem',
+                  color: C.textMuted, fontSize: '0.75rem', cursor: 'pointer',
+                }}>
+                  Show {showBottom ? 'top' : 'bottom'}
+                </button>
+              </div>
+              <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '8px' }}>
+                <p style={{ color: C.textMuted, fontSize: '0.72rem', marginBottom: '0.25rem' }}>Filter by emission</p>
+                <RangeSlider min={0} max={maxEm} step={1000} value={emRange} onChange={setEmRange} formatLabel={fmtEmission} />
+              </div>
+              <div ref={listRef} style={{ maxHeight: 300, overflowY: 'auto' }}>
+                {filteredByRange.map((c, i) => {
+                  const color = CONTINENT_COLORS[c.continent] || C.textDim
+                  const pct = c.total_emissions / byCountry[0].total_emissions
+                  const isSelected = selected?.country === c.country
+                  const isHighlighted = !isSelected && (highlighted === c.continent || highlighted === c.country)
+                  return (
+                    <div key={c.country}
+                      ref={(el) => { rowRefs.current[c.country] = el }}
+                      onClick={() => selectCountry(c)}
+                      onMouseEnter={() => !selected && setHighlighted(c.continent)}
+                      onMouseLeave={() => !selected && setHighlighted(null)}
+                      style={{
+                        padding: '0.35rem 0.5rem', borderRadius: 6, marginBottom: '2px',
+                        cursor: 'pointer', transition: 'all 0.12s',
+                        background: isSelected ? `${color}35` : isHighlighted ? `${color}22` : 'transparent',
+                        border: isSelected ? `1px solid ${color}70` : isHighlighted ? `1px solid ${color}55` : '1px solid transparent',
+                        boxShadow: (isSelected || isHighlighted) ? `inset 3px 0 0 ${color}` : 'none',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '3px' }}>
+                        <span style={{ color: C.textDim, fontSize: '0.72rem', minWidth: 18, textAlign: 'right' }}>#{i + 1}</span>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                        <span style={{ color: C.textPrimary, fontSize: '0.82rem', flex: 1 }}>{c.country}</span>
+                        <span style={{ color: C.textMuted, fontSize: '0.72rem' }}>{fmtEmission(c.total_emissions)}</span>
+                      </div>
+                      <div style={{ marginLeft: 30 }}>
+                        <div style={{ height: 3, borderRadius: 2, width: `${pct * 100}%`, background: `linear-gradient(90deg, ${color}, ${color}88)` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+                {filteredByRange.length === 0 && (
+                  <p style={{ color: C.textDim, fontSize: '0.82rem', padding: '0.5rem' }}>No countries in this range.</p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

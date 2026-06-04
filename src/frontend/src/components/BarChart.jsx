@@ -68,6 +68,7 @@ export default function BarChart({ data, valueKey = 'value', labelKey = 'entity'
       .attr('font-size', 10)
       .attr('pointer-events', 'none')
       .text((d) => `${d[labelKey]} (${d[valueKey].toFixed(1)})`)
+
   }, [data, selectedCode, width, height, C])
 
   return <svg ref={svgRef} width={width} height={height} />

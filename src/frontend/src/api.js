@@ -25,6 +25,11 @@ export async function fetchRiversByContinent() {
   return res.json()
 }
 
+export async function fetchRiversClusters() {
+  const res = await fetch(`${BASE}/rivers/clusters`)
+  return res.json()
+}
+
 export async function fetchOHI(goal = 'Index', dimension = 'score', year = 2023) {
   const res = await fetch(`${BASE}/ohi?goal=${goal}&dimension=${dimension}&year=${year}`)
   return res.json()

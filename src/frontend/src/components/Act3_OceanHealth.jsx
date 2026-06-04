@@ -55,10 +55,11 @@ export default function Act3_OceanHealth() {
   const [forecastMeta, setForecastMeta] = useState(null)
 
   const FORECAST_MODELS = [
-    { id: 'linear',       label: 'Linear',      short: 'Linear Regression' },
-    { id: 'polynomial',   label: 'Poly(2)',      short: 'Polynomial deg-2'  },
-    { id: 'holt_winters', label: 'Holt-Winters', short: 'Holt-Winters ES'  },
-    { id: 'arima',        label: 'ARIMA',        short: 'ARIMA(1,1,1)'     },
+    { id: 'linear',       label: 'Linear',      short: 'Linear Regression'     },
+    { id: 'polynomial',   label: 'Poly(2)',      short: 'Polynomial deg-2'      },
+    { id: 'holt_winters', label: 'Holt-Winters', short: 'Holt-Winters ES'       },
+    { id: 'arima',        label: 'ARIMA',        short: 'ARIMA(1,1,1)'          },
+    { id: 'prophet',      label: 'Prophet',      short: 'Facebook Prophet'      },
   ]
 
   const listRef = useRef()
