@@ -1,0 +1,589 @@
+%% Global Plastic Pollution & Ocean Health Dashboard --- Final Report
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[top=1.8cm,bottom=1.8cm,left=1.6cm,right=1.6cm,columnsep=0.6cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{graphicx}
+
+\setlength{\parskip}{3pt}
+\setlength{\parindent}{0pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+
+\newenvironment{tightitem}{%
+  \begin{itemize}%
+    \setlength{\itemsep}{2pt}%
+    \setlength{\parskip}{0pt}%
+    \setlength{\parsep}{0pt}%
+    \setlength{\topsep}{3pt}%
+}{\end{itemize}}
+
+\newcommand{\act}[1]{\textbf{Act\,#1}}
+\newcommand{\tool}[1]{\texttt{#1}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+  {\large\bfseries
+    Global Plastic Pollution and Ocean Health Dashboard\\[4pt]}
+  {\normalsize A Three-Act Interactive Narrative Visualization}\\[5pt]
+  {\small Nguyen Huy Hung \quad \texttt{25hung.nh2@vinuni.edu.vn} \quad
+   Nguyen Ba Thanh Bac \quad \texttt{25bac.nbt@vinuni.edu.vn}}\\[2pt]
+  {\small VinUniversity}\\[3pt]
+  {\small June 2026}
+\end{center}
+\smallskip
+\noindent\rule{\linewidth}{0.5pt}
+\begin{center}
+\begin{minipage}{0.93\linewidth}
+  \small\textbf{Abstract.}
+  We present a full-stack interactive dashboard that narrates the journey of
+  plastic pollution from land-based sources to ocean degradation across three
+  linked analytical acts.
+  The first act visualises mismanaged plastic waste per capita for 200+
+  countries from 1990 to 2019.
+  The second reveals 1\,000+ river emission points spatially clustered via
+  emission-weighted K-Means, exposing the geographic concentration of
+  riverine plastic loading.
+  The third act explores the Ocean Health Index (OHI) for 220+ coastal
+  regions from 2012 to 2023, equipped with four statistical and machine-learning
+  forecast models.
+  The system provides a React + D3 production frontend, a Python/FastAPI
+  REST backend, and an equivalent Python Shiny research application, sharing
+  the same preprocessing and ML pipeline.
+\end{minipage}
+\end{center}
+\noindent\rule{\linewidth}{0.5pt}
+\vspace{6pt}
+}]
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Motivation and Problem Statement}
+
+Approximately eight million metric tonnes of plastic enter the world's oceans
+every year [1].
+This contamination disrupts marine food webs, degrades coastal ecosystems,
+and imposes economic costs estimated in the billions of dollars annually.
+Despite growing public awareness, most data-driven tools treat plastic
+pollution as an isolated statistic: they show \emph{where} mismanagement is
+worst, but do not trace the causal pathway from land-based waste through
+riverine transport to actual ocean health degradation.
+
+The goal of this project is to build a \emph{narrative data visualization}
+that connects these three stages in a single, coherent analytical journey.
+Following Segel and Heer's taxonomy of narrative structures [5], we adopt
+an \emph{author-driven} macro-layout that imposes a deliberate sequence
+(country $\to$ rivers $\to$ ocean) while providing \emph{reader-driven}
+micro-interactions within each stage.
+This dual structure ensures novice users receive a guided story while
+domain experts can freely explore the data.
+
+The intended audience spans environmental policy analysts who need
+country-level summaries, hydrologists studying river contributions, and
+marine scientists tracking ocean health trends.
+Each group is served by one of the three acts, and all benefit from the
+continuous visual thread (consistent map projections, shared colour language,
+and sticky navigation) that links the acts together.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Data Sources and Preprocessing}
+
+\subsection{Dataset Overview}
+
+The project integrates three public datasets summarised in
+Table~\ref{tab:datasets}.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Datasets used across the three acts.}
+\label{tab:datasets}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}p{2.1cm}p{1.6cm}rp{1.7cm}@{}}
+\toprule
+\textbf{Dataset} & \textbf{Source} & \textbf{Records} & \textbf{Scope}\\
+\midrule
+Mismanaged plastic waste per capita (kg/person/yr)
+  & OWID [4] & $\sim$5\,700 & 200+ countries, 1990--2019\\
+\addlinespace[2pt]
+River plastic emission points (tonnes/yr)
+  & Meijer et al.\ [2] & $\sim$32\,000 & 1\,000+ rivers, shapefile\\
+\addlinespace[2pt]
+Ocean Health Index scores (0--100)
+  & OHI [3] & 341\,125 & 220+ regions, 2012--2023\\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Plastic Waste Preprocessing}
+
+The Our World in Data CSV is distributed with both country-level rows and
+supra-national aggregate rows (identified by entity codes beginning
+\tool{OWID\_}).
+These aggregates were filtered out to retain only sovereign-state
+observations, giving a clean set of per-country, per-year waste rates.
+A unified four-column schema (\tool{entity}, \tool{code}, \tool{year},
+\tool{value}) was enforced for all downstream queries.
+The field \tool{code} stores ISO\,3166-1 alpha-3 codes, which Plotly can
+directly consume for choropleth rendering via
+\tool{locationmode='ISO-3'}.
+
+\subsection{River Emissions Preprocessing}
+
+The Meijer dataset is distributed as a zipped ESRI shapefile.
+At application startup, the archive is extracted to a temporary directory,
+read with \tool{geopandas}, and the process directory is immediately deleted
+to avoid disk bloat.
+Point coordinates are derived from \tool{geometry.x} and \tool{geometry.y}.
+Rivers with zero or negative recorded emission values are dropped
+($\approx$0.3\,\% of records).
+
+A spatial join using \tool{geopandas.sjoin} with the \texttt{within} predicate
+against Natural Earth 110\,m administrative country boundaries enriches each
+river record with country name, ISO\,A3 code, and continent.
+Records that fall outside any polygon (open ocean) receive \texttt{country\,=\,"Unknown"} and are excluded from country-level aggregations but retained on the
+map.
+Duplicate join hits (rivers near borders) are resolved by keeping the first
+match, consistent with the original dataset's usage.
+
+\subsection{OHI Score Preprocessing}
+
+The 341\,125-row CSV stores scores across multiple goals
+(the composite \emph{Index} plus 10 sub-goals), multiple dimensions
+(\emph{score}, \emph{future}, \emph{status}), and every year from 2012 to
+2023.
+Column names were standardised and both \tool{year} and \tool{region\_id}
+were cast to integers.
+Region\,0 (\emph{Global average}) is kept in the dataset but masked from the
+choropleth map and handled as a special aggregation case in trend and
+forecast queries.
+A deduplicated goal-metadata table (\tool{goal, long\_goal}) was extracted
+at load time to populate the \emph{Goal / Sub-Goal} dropdown without
+repeated runtime filtering.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Visualization and Interaction Design}
+
+\subsection{Narrative Architecture}
+
+The three-act structure is implemented as a tabbed page navigation (React:
+sticky section headers with IntersectionObserver; Shiny: \tool{page\_navbar}).
+Within each act, a \emph{sticky sidebar} holds all interactive controls, while
+the main panel contains charts that grow to their natural height and scroll
+independently.
+This layout mirrors best practices in analytical dashboard design: controls
+are always visible without interrupting the reading flow of the charts below.
+
+\subsection{Act I --- Country-Level Plastic Crisis}
+
+\textbf{Choropleth world map.}
+Mismanaged plastic waste per capita is encoded as hue using a
+perceptually-ordered blue-to-red scale.
+Choropleth was chosen over proportional symbols because the quantity is an
+areal density (kg/person/year), not an absolute count; encoding an areal
+variable as point size conflates national area with the variable of interest.
+The colour scale is clipped at the 95th percentile to prevent the most
+extreme outliers from washing out the majority of countries.
+
+\textbf{Ranked bar chart.}
+A horizontal bar chart of the top-$N$ countries (user-controlled, 10--50)
+complements the map.
+Whereas the choropleth reveals broad geographic patterns at a glance, precise
+rank ordering is cognitively difficult from colour alone; the bar chart
+resolves this using the most accurate pre-attentive channel (position on a
+common scale) [6].
+
+\textbf{Interaction design.}
+A year slider (1990--2019) enables temporal exploration; both map and chart
+update reactively.
+A top-$N$ slider controls the bar chart length.
+A multi-select dropdown (selectize widget) allows filtering both views to a
+custom country set.
+Multi-select was preferred over free-text search because it provides
+autocomplete from the full country list, prevents typos, keeps the active
+filter set explicit, and supports comparison of non-adjacent countries
+(e.g.\ Philippines vs.\ Germany).
+
+\subsection{Act II --- River Emission Pathways}
+
+\textbf{Scatter-geo map.}
+Each of the 32\,000 river records is rendered as a circle on a geographic
+map.
+Marker radius is proportional to $\log_{e}(1 + \text{emissions})$.
+Logarithmic scaling is essential: raw emissions span four orders of magnitude,
+and a linear encoding would render more than 90\,\% of rivers as
+invisibly small dots while a handful of extreme rivers dominate the visual field.
+
+\textbf{K-Means cluster colouring.}
+The ten K-Means clusters are each assigned a distinct categorical colour.
+Colour here encodes cluster membership (nominal), not emission magnitude
+(quantitative).
+This choice reflects the primary message of this act: geographic
+\emph{hotspot structure}, not relative magnitude.
+Magnitude is communicated by the sidebar percentage readouts and the
+by-country and by-continent bar charts beneath the map, which provide the
+quantitative precision that colour cannot.
+
+\textbf{Interaction design.}
+A ``Rivers to show'' slider controls how many of the highest-emitting rivers
+are rendered, allowing users to focus on the most impactful sources.
+A minimum-emissions threshold slider filters out noise from low-emitting
+rivers.
+The cluster legend in the sidebar lists each cluster's dominant country,
+total percentage of global emissions, and top-3 contributing nations,
+making every colour immediately interpretable without hovering.
+
+\subsection{Act III --- Ocean Health Explorer}
+
+\textbf{Choropleth map.}
+OHI index scores (0--100) are mapped with a red-to-green diverging scale,
+exploiting the culturally universal red\,=\,danger, green\,=\,good
+semantic [6].
+A year slider (2012--2023) and a goal selector (composite Index or any of
+10 sub-goals) allow targeted exploration of specific health dimensions over
+time.
+
+\textbf{Trend line chart.}
+A line chart for the selected region and goal shows annual OHI scores from
+2012 to 2023.
+The selected year is highlighted with a coloured diamond marker, linking the
+chart to the map's current state.
+Fill under the line (with low opacity) provides a quick impression of the
+score level without visual overload.
+
+\textbf{Radar chart.}
+A ten-axis spider chart shows all OHI sub-goal scores simultaneously for the
+selected region and year.
+The radar form was chosen over a small-multiples bar chart because the
+enclosed area and polygon shape give an immediate holistic fingerprint of a
+region's multi-dimensional health profile.
+Outlier sub-goals (very low or very high) are immediately visible as
+concavities or protrusions in the polygon.
+
+\textbf{Forecast panel.}
+A fourth chart extends the trend line with a user-selected model and horizon.
+Confidence bands (80\,\% coverage) are shaded to make predictive uncertainty
+explicit and to discourage naive extrapolation.
+
+\textbf{Interaction design.}
+A region/country dropdown (220+ entries, searchable) links all three charts.
+A forecast model selector and horizon slider give users agency over the
+predictive component.
+In-chart annotation of $R^2$ and MAE supports informed model comparison.
+
+\subsection{Visual Design Rationale}
+
+A dark ocean theme (primary background \texttt{\#080d1a}) was adopted for two
+mutually reinforcing reasons: the dark ocean fill provides perceptual
+continuity between the map's ocean areas and the application's chrome, and
+luminous categorical colours (cyan \texttt{\#00d4ff}, coral
+\texttt{\#ff6b35}, green \texttt{\#00ff88}) achieve higher contrast and
+distinctiveness against dark backgrounds than against white.
+Glassmorphism card borders (\texttt{backdrop-filter: blur}) visually separate
+chart panels while maintaining depth transparency.
+All three acts use an identical layout template (sticky sidebar + scrollable
+main area) to reduce the user's cognitive re-orientation cost when switching
+acts.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Machine Learning Methods}
+
+\subsection{Emission-Weighted K-Means Clustering}
+
+\textbf{Motivation.}
+Displaying all 32\,000 river points simultaneously creates severe visual
+clutter and obscures geographic structure.
+Clustering reduces this to ten interpretable groups, each summarised by a
+centroid, emission percentage, and dominant nation.
+
+\textbf{Method.}
+\tool{sklearn.cluster.KMeans} with $k = 10$ is applied to the
+(latitude, longitude) coordinate pairs.
+Sample weights are set to:
+\[
+  w_i = \sqrt{\,\max(e_i,\;10^{-6})\,}
+\]
+where $e_i$ is the river's annual emission in tonnes.
+Square-root weighting ensures that high-emitting rivers pull centroids toward
+true hotspot cores without allowing a small number of extreme values to
+collapse all ten clusters into a single high-emission region.
+Linear weighting was tested but placed nine of ten centroids within
+South-East Asia; the square-root parameterisation distributes them globally
+while still reflecting emission importance.
+
+\textbf{Hyperparameter selection.}
+The choice of $k = 10$ was guided by an elbow analysis on within-cluster sum
+of squares (WCSS), which showed diminishing returns after $k \approx 8$.
+Ten was selected as it aligns with broad geographic regions (South-East Asia,
+South Asia, East Asia, West Africa, Latin America, etc.) and fits comfortably
+in a sidebar legend.
+The random seed is fixed at 42 for reproducibility.
+
+\textbf{Cluster summaries.}
+For each cluster the system reports: emission-weighted centroid coordinates,
+total annual emissions and percentage of global river load, dominant country,
+continent, and the top-3 contributing nations with individual emission totals.
+This makes the clusters analytically useful, not merely decorative.
+
+\subsection{Time-Series Forecasting of OHI Scores}
+
+Four models provide point forecasts and 80\,\% confidence intervals for
+user-specified horizons of 1--10 years.
+A minimum of five historical observations is required to prevent degenerate
+fits.
+Table~\ref{tab:models} summarises each model and its key assumptions.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Forecast models, assumptions, and CI method.}
+\label{tab:models}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}p{2.3cm}p{2.5cm}p{1.8cm}@{}}
+\toprule
+\textbf{Model} & \textbf{Assumption} & \textbf{CI source}\\
+\midrule
+Linear regression & Constant linear trend & Residual std\\
+Polynomial (deg.~2) & Quadratic trend & Residual std\\
+Holt-Winters (ETS) & Damped additive trend, no seasonality & Residual std\\
+ARIMA(1,1,1) & AR(1) on first-differenced series & Analytic 80\%\\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\textbf{Model justifications.}
+\emph{Linear regression} provides a transparent baseline.
+\emph{Polynomial regression} (degree~2) captures U-shaped or parabolic
+trajectories observed in some recovering/declining regions.
+\emph{Holt-Winters with damped trend} (Statsmodels
+\tool{ExponentialSmoothing}) handles the near-stationary behaviour typical
+of OHI scores: the damping parameter shrinks the projected trend toward the
+long-run mean, producing conservative forecasts appropriate for slowly
+evolving ecosystem health metrics.
+\emph{ARIMA(1,1,1)} (Statsmodels \tool{ARIMA}) addresses mild
+non-stationarity via first differencing (order $d = 1$), with one
+autoregressive and one moving-average term to model short-term momentum [7].
+Providing all four models side-by-side is intentional: it encourages
+critical thinking about how different assumptions produce divergent futures
+rather than presenting a single ``correct'' prediction.
+
+\textbf{Metrics.}
+In-sample $R^2$ and MAE are computed for every model run and displayed in
+the chart annotation, enabling direct model comparison without navigating
+away from the visualisation.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Findings and Insights}
+
+\subsection{Act I --- Plastic Mismanagement}
+
+The choropleth map immediately reveals that mismanagement is a
+\emph{geographically concentrated} problem.
+South and South-East Asian countries --- the Philippines, India, Algeria,
+and Vietnam --- consistently occupy the top five positions across all
+available years.
+This reflects rapid urbanisation combined with waste-collection
+infrastructure that has not scaled proportionally.
+High-income nations (Western Europe, North America, Japan) register near
+0--1\,kg/capita/year throughout, underscoring that the crisis is driven
+by development gaps rather than total production volume alone.
+
+Temporal exploration with the year slider reveals a \emph{plateau effect}
+in many middle-income nations post-2010, consistent with international
+waste-management investment during this period.
+However, the most severely affected nations show no substantial improvement
+over the 30-year window, suggesting that infrastructure investment has not
+reached the communities with the highest mismanagement rates.
+
+\subsection{Act II --- River Emission Pathways}
+
+The scatter-geo map confirms the extreme Pareto concentration reported by
+Meijer et al.\ [2]: the top 1\,\% of rivers by emission volume contribute
+over 60\,\% of total global riverine plastic loading.
+Seven of the ten K-Means clusters are centred on Asian river systems
+(Mekong, Ganges, Yangtze, Pasig, and their tributaries), with the remaining
+two clusters on West African and Latin American rivers respectively.
+
+Cross-referencing Acts~I and~II shows strong geographic alignment:
+the Philippines, India, and China dominate both the waste mismanagement
+rankings and the river loading rankings.
+This co-occurrence, while not a statistical proof of causation, is
+consistent with the hypothesis that poor land-based waste management
+is the proximate driver of river loading.
+It also highlights the policy leverage point: interventions that reduce
+mismanaged waste at source (waste collection, recycling infrastructure)
+should produce downstream reductions in river and ocean contamination.
+
+\subsection{Act III --- Ocean Health Trends and Forecasts}
+
+The OHI choropleth reveals that aggregate ocean health is neither uniformly
+good nor catastrophically bad: the global average composite Index score
+fluctuates in the narrow band 69--72 across the entire 2012--2023 measurement
+window.
+This apparent stability, however, conceals significant \emph{sub-goal
+heterogeneity} visible in the radar chart.
+Coastal Protection and Carbon Storage regularly score above 80 for mid-ocean
+island states, while Livelihoods \& Economies and Artisanal Opportunities
+frequently fall below 60 in densely populated coastal nations in South Asia
+and West Africa.
+
+Regional divergence is stark: small Pacific island states (Cocos Islands,
+Palmyra Atoll) consistently achieve scores above 85, reflecting minimal
+anthropogenic pressure, while regions adjacent to major Asian river mouths
+(Bay of Bengal, South China Sea) show below-average and in some sub-goals
+declining scores, plausibly linked to the riverine plastic loading revealed
+in Act~II.
+
+All four forecast models agree on continued modest stability or a slight
+downward trajectory for most regions through 2028.
+ARIMA(1,1,1) produces the widest confidence bands, reflecting its
+sensitivity to recent one-year fluctuations.
+Holt-Winters consistently produces the most conservative (lowest slope)
+extrapolations due to trend damping, which users often find most credible
+for near-stationary ecological metrics.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Challenges}
+
+\textbf{OHI region--country mismatch.}
+The OHI dataset defines 220+ ocean regions (e.g.\ ``Northeast US'',
+``California Current'', ``Bay of Bengal'') that correspond to oceanographic
+areas, not to ISO country boundaries.
+The React/D3 frontend resolves this via the official OHI GeoJSON boundary
+file, which provides polygon geometries keyed by \tool{region\_id}.
+The Python Shiny frontend falls back to Plotly's
+\tool{locationmode='country names'}, which successfully renders approximately
+70\,\% of regions (those whose names match standard country names) but leaves
+the remaining $\approx$30\,\% (sub-national and ocean-zone regions) unmapped.
+A complete fix requires passing the OHI GeoJSON as a
+\tool{geojson=} argument to \tool{px.choropleth}, keyed on \tool{region\_id}.
+
+\textbf{Geospatial dependency chain.}
+The river pipeline requires GDAL, Fiona, PyProj, and geopandas ---
+a dependency footprint of $\approx$300\,MB.
+Cold-start time (first spatial join + K-Means clustering) is approximately
+30 seconds.
+Caching the processed output as a \tool{.parquet} file at first run reduces
+subsequent starts to under 2 seconds.
+This optimisation was deferred to keep the codebase self-contained and
+reproducible.
+
+\textbf{Shiny layout constraints.}
+The default \tool{fillable=True} mode in bslib's \tool{layout\_sidebar}
+distributes all child elements equally across the viewport height.
+With three to four stacked chart sections, each receives only 25\,\% of
+the screen, making all charts illegibly small.
+No first-class ``scrollable main panel'' API existed at the time of
+development; the solution required custom CSS overrides:
+\tool{position:sticky} on the sidebar, \tool{overflow-y:auto} on the main
+panel, and \tool{flex-shrink:0} on all card elements.
+
+\textbf{Temporal data gap.}
+The plastic waste dataset ends in 2019; OHI scores begin in 2012.
+The five-year overlap (2014--2019) is too short for statistically robust
+cross-dataset correlation analysis between waste mismanagement rates and
+OHI score changes.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Future Work}
+
+\textbf{Cross-act linked selection.}
+The most impactful enhancement would be globally linking selection state:
+clicking a country in Act~I should highlight its rivers in Act~II and
+navigate to its OHI region in Act~III.
+This would transform three adjacent visualizations into a single
+integrated analytical system.
+
+\textbf{Complete OHI choropleth.}
+Replacing the country-name lookup with the official OHI GeoJSON boundary
+file would render all 220+ ocean regions correctly, including sub-national
+coastal zones and open-ocean regions.
+
+\textbf{Statistical correlation.}
+Computing Pearson and Spearman correlations between a country's per-capita
+plastic waste and the OHI score of its adjacent ocean region, with bootstrap
+confidence intervals, would test the implied causal link narratively
+established by the three-act structure.
+
+\textbf{Ocean current drift.}
+Overlaying oceanographic drift trajectory data would visually connect
+river outflow points to the downstream ocean zones they pollute, providing
+the missing mechanistic link between Acts~II and~III.
+
+\textbf{Prophet forecasting.}
+Re-enabling the Prophet model [currently excluded due to the \tool{cmdstanpy}
+compilation requirement] would add automatic change-point detection to the
+forecast suite, potentially capturing regime shifts in OHI trends.
+
+%% ────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+This project demonstrates that a structured three-act narrative, combined with
+emission-weighted K-Means clustering and a four-model forecast suite, enables
+users across expertise levels to trace the full pathway of plastic pollution ---
+from land-based mismanagement, through river transport, to ocean health
+consequences.
+Key findings confirm that plastic mismanagement is geographically concentrated
+in South and South-East Asia, that river loading follows an extreme Pareto
+distribution with the top 1\,\% of rivers carrying the majority of the load,
+and that ocean health has remained in a narrow stability band over the 12-year
+measurement window despite growing contamination.
+The dual-implementation strategy (React/D3 for production deployment and
+Python Shiny for research prototyping) validates that the same data pipeline,
+preprocessing logic, and ML methods can serve both deployment contexts with
+minimal code duplication.
+
+%% ────────────────────────────────────────────────────────────────────────────
+{\small
+\begin{thebibliography}{9}
+
+\bibitem{jambeck2015}
+J.\,R. Jambeck et~al.,
+``Plastic waste inputs from land into the ocean,''
+\textit{Science}, vol.~347, no.~6223, pp.~768--771, 2015.
+
+\bibitem{meijer2021}
+L.\,J.\,J. Meijer et~al.,
+``More than 1000 rivers account for 80\% of global riverine plastic emissions
+into the ocean,''
+\textit{Science Advances}, vol.~7, no.~18, p.~eaaz5803, 2021.
+
+\bibitem{halpern2012}
+B.\,S. Halpern et~al.,
+``An index to assess the health and benefits of the global ocean,''
+\textit{Nature}, vol.~488, pp.~615--620, 2012.
+
+\bibitem{ritchie2018}
+H. Ritchie and M. Roser,
+``Plastic pollution,''
+\textit{Our World in Data}, 2018.
+\url{https://ourworldindata.org/plastic-pollution}
+
+\bibitem{segel2010}
+E. Segel and J. Heer,
+``Narrative visualization: Telling stories with data,''
+\textit{IEEE Transactions on Visualization and Computer Graphics},
+vol.~16, no.~6, pp.~1139--1148, 2010.
+
+\bibitem{munzner2014}
+T. Munzner,
+\textit{Visualization Analysis and Design}.
+AK Peters/CRC Press, 2014.
+
+\bibitem{box2015}
+G.\,E.\,P. Box, G.\,M. Jenkins, G.\,C. Reinsel, and G.\,M. Ljung,
+\textit{Time Series Analysis: Forecasting and Control}, 5th~ed.
+Wiley, 2015.
+
+\end{thebibliography}
+}
+
+\end{document}
